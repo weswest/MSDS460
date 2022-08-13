@@ -13,54 +13,47 @@ seed = 460  # Set the random seed for the assignment
 # It seems that the data below is going to be the rainfall measured in inches
 
 df_rainfall = pd.read_csv ('monthly-rainfall-data.csv')
-
-print(df_rainfall.head())
-print(df_rainfall.columns)
 df_rainfall.set_index('Year', inplace=True)
-print(df_rainfall.head())
-print(df_rainfall.columns)
 
 #%%
 months = list(df_rainfall.columns)
-print(months)
+#print(months)
 
 #%%
 plot_rainfallmonthly = df_rainfall.boxplot(column=months)
-print(plot_rainfallmonthly)
 plt.title('Monthly Rainfall 2000-2011 Box-Whisker')
 fig = plt.gcf()
-fig.savefig('MonthlyRainfall.png')
+fig.savefig('Graphs/MonthlyRainfall.png')
+plt.close()
 #%%
 
 df_rainfall_values = df_rainfall.melt()['value']
 #print(df_rainfall_values)
 rf_mu, rf_std = stats.norm.fit(df_rainfall_values)
-print(rf_mu, rf_std)
-
 rf_hist = plt.hist(df_rainfall_values, bins=50, density=True, alpha=0.6, color='b')
-
-plt.show()
-#%%
-print(type(df_rainfall_values))
-pd.set_option('display.max_rows', None)
-print(df_rainfall_values.sort_values())
-pd.set_option('display.max_rows', 10)
-
-
-
+plt.title('Distribution of Rainfall 2000-2011 All Months')
+fig = plt.gcf()
+fig.savefig('Graphs/TotalRainfall.png')
+plt.close()
 #%%
 ###
 # Figure out which distribution fits the data the best
 # Note: hat tip to https://medium.com/the-researchers-guide/finding-the-best-distribution-that-fits-your-data-using-pythons-fitter-library-319a5a0972e9
-###
 
 df = df_rainfall_values.copy()
 
 print(df)
+# Note: I tried a handful of different approaches to get the right list here
+# The list below is the Fitter-standard "get common distributions" list, plus beta
+# Given the literature, I wanted to ensure beta was one of the distributions tested, even though it wasn't the best
 f = Fitter(df,
-           distributions= get_common_distributions())
+           distributions= ['gamma','beta','chi2','exponpow','lognorm','expon'])
 f.fit()
+
 print(f.summary())
+fig = plt.gcf()
+fig.savefig('Graphs/RainfallFitter.png')
+plt.close()
 
 #%%
 # Note: gamma fits the best
@@ -68,7 +61,6 @@ print(f.summary())
 # Note that location is essentially 0.
 
 rf_gamma = f.get_best(method = 'sumsquare_error')['gamma']
-print(rf_gamma)
 
 alpha = rf_gamma['a']
 shape = alpha
@@ -76,8 +68,8 @@ loc = rf_gamma['loc']
 scale = rf_gamma['scale']
 beta = 1 / scale
 
-sample_gamma = random.gammavariate(alpha, beta)
-print('Gamma: ', sample_gamma)
+#sample_gamma = random.gammavariate(alpha, beta)
+#print('Gamma: ', sample_gamma)
 
 #%%
 s = np.random.gamma(shape, scale, 10000)
@@ -91,7 +83,9 @@ print(s_avg)
 #   So if the problem statement shows a roof of 3k sqft, then each inch of rain will capture ~1800 gallons
 #   Note: the average rain catchment from the data shows an average of 2.3, whereas the gamma sample avg is 1.9
 # So the data itself would show ~4000 gal / month (2.3 x 1800) while the sample distribution shows ~3400 gal / month
-#%%
+# Note: this means that the problem, as stated, WILL ALWAYS FAIL.  If the avg inflow is 4k and outflow is 4.6k
+#   Then you WILL run out of water over a 360 month horizon
+
 
 # Scenario creation
 
@@ -108,12 +102,12 @@ print(s_avg)
 WATER_TANK_SIZE = 25000 # Gallons
 WATER_TANK_INIT = 10000 # Gallons.  Per the problem, presume we start with 10k gal of water
 CATCHMENT_EFFICIENCY = [90,98] # Ranges between 90 and 98%
-CATCHMENT_SIZE = 30000 # Sq. Ft.  Note the conversion provided in the assignment
+CATCHMENT_SIZE = 3000 # Sq. Ft.  Note the conversion provided in the assignment
 CUBIC_FT_TO_GAL = 7.48 # Input given by the problem
 WATER_USAGE = [4000, 5200] # Range of water used to water crops each month
 DURATION = 360 # Number of months in the 30 year forecast
 ITERATIONS = 1000 # Number of scenario runs executed
-#DURATION = 5 # placeholder as a debugger
+CLIMATE_CHANGE_HAIRCUT = 0  # Represents the reduction in rainfall driven by climate change.  0% = problem as stated
 
 # Delivery agent will bring water every month
 # Retrieval agent will take water every month
@@ -122,7 +116,7 @@ ITERATIONS = 1000 # Number of scenario runs executed
 def monthly_rain(name, env):
     """ Every month a volume of rain falls.  The rain is put into the storage tank"""
 
-    rainfall_level_inches = random.gammavariate(shape, scale)
+    rainfall_level_inches = random.gammavariate(shape, scale) * (1-CLIMATE_CHANGE_HAIRCUT)
     rainfall_catchment_pct = random.randint(*CATCHMENT_EFFICIENCY) / 100
     rainfall_capture_inches = rainfall_level_inches * rainfall_catchment_pct
     rainfall_capture_cubicft = rainfall_capture_inches * CATCHMENT_SIZE / 12
@@ -176,7 +170,31 @@ for i in range(1,ITERATIONS+1):
     if i % 50 == 0:
         print('On scenario # %d' % i)
 
-print(df_tanklevel)
+#%%
+df_minwater = pd.DataFrame()
+df_minwater['min'] = df_tanklevel.min()
+n_zeros = np.count_nonzero(df_minwater['min']==0)
+print('# iterations where we ran out of water: ',n_zeros)
 
 #%%
 
+# Code below creates a histogram of end-states
+
+mw_hist = df_minwater.plot.hist(bins=20, density=True, alpha=0.6, color='b')
+plt.title('Histogram of min water per simulation.  %d scenarios fail' % n_zeros)
+fig = plt.gcf()
+filename = 'Graphs/MinWaterHistRoof{c}kTank{t}kCCHC{cchc}.png'.format(c=round(CATCHMENT_SIZE/1000), t=round(WATER_TANK_SIZE/1000), cchc=round(CLIMATE_CHANGE_HAIRCUT*100))
+fig.savefig(filename)
+plt.close()
+
+#%%
+
+# Code below creates a time series of the first 20 iterations.  A good representation of what the scenarios look like
+df_tanklevel_firstn = df_tanklevel.iloc[:,:20]
+
+df_tanklevel_firstn.plot()
+plt.title('Water level per month (first 20 iterations)')
+fig = plt.gcf()
+filename = 'Graphs/RainfallTSRoof{c}kTank{t}kCCHC{cchc}.png'.format(c=round(CATCHMENT_SIZE/1000), t=round(WATER_TANK_SIZE/1000), cchc=round(CLIMATE_CHANGE_HAIRCUT*100))
+fig.savefig(filename)
+plt.close()
